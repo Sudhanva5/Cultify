@@ -12,11 +12,15 @@ from app.services.cron_service import start_scheduler, stop_scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 
+# Ensure upload + static directories exist *before* StaticFiles mounts them.
+# On a first boot the volume is empty, and StaticFiles raises at import time
+# if the directory is missing.
+Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+Path(settings.STATIC_DIR, "exercises").mkdir(parents=True, exist_ok=True)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
-    Path(settings.STATIC_DIR, "exercises").mkdir(parents=True, exist_ok=True)
     start_scheduler()
     try:
         yield
