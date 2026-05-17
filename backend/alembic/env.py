@@ -42,6 +42,15 @@ async def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Fail fast if a previous run left a zombie txn holding locks on
+        # alembic_version. Without these, asyncpg waits forever and the
+        # whole deploy hangs.
+        connect_args={
+            "server_settings": {
+                "lock_timeout": "10000",        # 10s per blocked lock acquisition
+                "statement_timeout": "120000",  # 2m ceiling per statement
+            }
+        },
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

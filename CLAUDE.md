@@ -1,6 +1,140 @@
-# CLAUDE.md — CultifyMe
+# CLAUDE.md
 
-This is the single source of truth for building CultifyMe. Read every word before writing any code. Build exactly what is described. Nothing more.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## Operating notes (read first)
+
+The bulk of this file is the original product spec ("CultifyMe — single source of truth"). The spec is authoritative for **product behavior, database schema, API shape, prompts, and non-negotiable rules** — everything below the `## What is CultifyMe` heading. But two things have changed since the spec was written:
+
+1. **The mobile app is native iOS SwiftUI, not React Native + Expo.** The Expo/React Native section further down describes the original plan — ignore it for implementation. Use the SwiftUI layout described under "Mobile architecture (as built)" below.
+2. **The cron + deploy startup has been simplified.** The seeder no longer runs on boot. See "Deployment realities" below.
+
+If the spec and reality conflict, reality (this preamble + the code) wins. Update the spec section in the same PR when you change behavior so it doesn't drift further.
+
+---
+
+## Repo layout
+
+```
+/
+├── backend/                  ← FastAPI service, deployed to Railway
+│   ├── app/                  ← routers, models, services, schemas
+│   ├── alembic/              ← migrations (single file: 0001_initial.py)
+│   ├── scripts/seed_exercises.py
+│   ├── static/exercises/     ← seeded exercise GIFs (gitignored)
+│   ├── uploads/              ← user food photos (gitignored)
+│   ├── Dockerfile, railway.toml, requirements.txt
+└── Cultify/                  ← native iOS SwiftUI app
+    ├── Cultify.xcodeproj
+    └── Cultify/
+        ├── CultifyApp.swift, RootView.swift
+        ├── Auth/             ← LoginView, RegisterView
+        ├── Main/MainTabView.swift   ← two tabs: Log + Analysis
+        ├── Log/              ← WorkoutSection, FoodSection, SleepSection, WeightSection + bottom-sheet pickers
+        ├── Analysis/         ← AnalysisCardView, NutritionArtifactView, ChatView, CalendarStripView
+        └── Shared/           ← APIClient, SessionStore, Keychain, Models, Theme, AppConfig, DateHelpers
+```
+
+There is no `mobile/` directory; the Expo paths in the spec are aspirational.
+
+---
+
+## Common commands
+
+### Backend (run from `backend/`)
+
+```bash
+# Install
+pip install -r requirements.txt
+
+# Run locally (assumes .env present, Postgres reachable)
+uvicorn app.main:app --reload --port 8000
+
+# Migrations
+alembic upgrade head                 # apply
+alembic revision -m "msg" --autogenerate
+alembic downgrade -1
+
+# Seed exercise reference table + download ~800 images.
+# Idempotent — safe to re-run. Run once after the first deploy.
+python scripts/seed_exercises.py
+```
+
+There is no test suite or linter configured in this repo yet. Don't invent one without asking.
+
+### iOS app
+
+Open `Cultify/Cultify.xcodeproj` in Xcode and run on a simulator or device. To point at a non-localhost backend, edit the Run scheme: Edit Scheme → Run → Arguments → Environment Variables → add `CULTIFY_API_URL=https://your-railway-url`. See [Cultify/Cultify/Shared/AppConfig.swift](Cultify/Cultify/Shared/AppConfig.swift).
+
+### Railway
+
+```bash
+# Run the seeder against the deployed service (one-off, after first deploy)
+railway run --service Cultify python scripts/seed_exercises.py
+
+# Tail logs
+railway logs --service Cultify
+```
+
+---
+
+## Backend architecture
+
+- **Async all the way.** SQLAlchemy 2.0 async + asyncpg. `get_db()` yields an `AsyncSession`; every router and service awaits it. Do not introduce sync DB calls — they will deadlock under uvicorn.
+- **DB URL fixup.** Railway-managed Postgres exposes `postgresql://...`, but SQLAlchemy needs the asyncpg driver suffix. [backend/app/database.py](backend/app/database.py) rewrites `postgresql://` → `postgresql+asyncpg://` at import time. Keep that rewrite if you touch this file.
+- **Auth.** JWT via python-jose, bcrypt via passlib. [`get_current_user`](backend/app/routers/auth.py) is the dependency every protected endpoint must use. It also validates the `Authorization: Bearer …` header.
+- **Scheduler lives in-process.** `AsyncIOScheduler` is started/stopped via FastAPI's `lifespan` context manager in [backend/app/main.py](backend/app/main.py). Only one job: `run_nightly_analysis` at 22:00 IST. Per-user failures are caught and logged so one bad user doesn't block the rest.
+- **Daily analysis upsert.** [backend/app/services/cron_service.py](backend/app/services/cron_service.py) uses Postgres `INSERT ... ON CONFLICT` against the constraint named `uq_daily_analysis_user_date`. If you rename the unique constraint in a migration, update this string too.
+- **Claude integration.** [backend/app/services/claude_service.py](backend/app/services/claude_service.py) has three entry points: food-photo vision, nightly analysis, chat. Model id `claude-sonnet-4-5` is configurable via `CLAUDE_MODEL` in [config.py](backend/app/config.py). The service runs the SDK's sync client inside `asyncio.to_thread` — don't switch it to a fake async wrapper.
+- **JSON parsing from Claude.** `_extract_json` in claude_service handles markdown code-fence wrapping and falls back to a regex `{...}` extract. Use it whenever you parse a Claude response.
+- **Static files.** `/static` serves seeded exercise GIFs; `/uploads` serves user food photos. Both directories are created at module import time in `main.py` so Railway's `StaticFiles` mount doesn't crash on a fresh deploy.
+
+---
+
+## Mobile architecture (as built)
+
+- **SwiftUI + `@Observable`** state objects (iOS 17+). `SessionStore` is the auth state holder; injected via `.environment(session)` in `CultifyApp.swift`.
+- **Single API client.** [Cultify/Cultify/Shared/APIClient.swift](Cultify/Cultify/Shared/APIClient.swift) is the only place that talks to the backend. It:
+  - Attaches `Authorization: Bearer <token>` from `SessionStore.shared.token` automatically.
+  - On `401`: only clears the session if a token was actually present (so the dev mock user isn't wiped on every anonymous call).
+  - On `429`: parses FastAPI's `{detail: {messages_used, limit}}` into `APIError.rateLimited`.
+  - Decodes ISO-8601 with both fractional-seconds and plain variants — backend timestamps come both ways.
+- **Token storage.** `Keychain.swift` uses `kSecAttrAccessibleAfterFirstUnlock`. Service id `com.cultifyme.app`, account key `cultify_jwt`.
+- **Dev auth bypass.** [Cultify/Cultify/RootView.swift](Cultify/Cultify/RootView.swift) currently renders `MainTabView()` directly and calls `session.mockSignIn()` so the UI can render without a real backend session. The login/splash flow is wired up but disabled — restore it by swapping `MainTabView()` for the splash/auth gate before shipping. There's a comment in `RootView` marking the swap.
+- **API base URL.** Reads `CULTIFY_API_URL` from `ProcessInfo.environment`; falls back to `http://localhost:8000`. Set the env var in the Xcode scheme, not in `Info.plist`.
+- **Image URLs.** `APIClient.staticURL(_:)` and `uploadURL(_:)` resolve backend-relative paths like `exercises/0001.jpg` to absolute URLs against `apiBaseURL`. Always go through these helpers.
+
+---
+
+## Deployment realities (Railway)
+
+The current `railway.toml` and `Dockerfile` reflect lessons learned during initial deploys — don't undo these without understanding why:
+
+- **Neither the seeder nor alembic is in the start command.** Both used to block uvicorn from binding the port on cold deploys, which made the service un-deployable for ~unbounded time:
+  - Seeder downloads ~800 images sequentially.
+  - Alembic once got SIGKILL'd mid-migration, leaving a zombie Postgres session holding locks on `alembic_version`. Every subsequent deploy then hung on the first `alembic` query for minutes until Railway killed it. With Postgres `tcp_keepalives_idle` at 7200s the zombie can persist for hours.
+  Start command is now just `uvicorn app.main:app --host 0.0.0.0 --port 8000`. Run migrations and seeding manually after pushing changes (both are idempotent):
+  ```bash
+  railway run --service Cultify alembic upgrade head
+  railway run --service Cultify python scripts/seed_exercises.py
+  ```
+- **Alembic has `lock_timeout=10s` and `statement_timeout=2m`** baked into [backend/alembic/env.py](backend/alembic/env.py) via asyncpg `server_settings`. Without these, a blocked migration query would hang forever. If a migration legitimately needs longer, raise `statement_timeout` for that one run rather than removing the cap.
+- **Port is hardcoded to 8000.** Railway does not auto-inject `$PORT` for Dockerfile builds, so both the Dockerfile `CMD` and `railway.toml` `startCommand` use `--port 8000` literally. If you switch to a Nixpacks builder this will need to change.
+- **`PYTHONUNBUFFERED=1`** is set in the Dockerfile so uvicorn / Python `print` output flushes immediately — without it, crashes during boot were invisible in Railway logs.
+- **Boot trace prints in [main.py](backend/app/main.py).** The `>>> Cultify boot: …` lines exist deliberately to localize where startup dies in Railway. Leave them in unless you have a better startup-debugging story.
+- **Healthcheck timeout: 600s.** Generous to absorb Alembic + cold start. `/health` returns `{"status": "ok"}`.
+
+---
+
+## Conventions worth knowing
+
+- All timestamps are `TIMESTAMPTZ`. The backend serializes as ISO-8601; the iOS decoder handles both fractional-second and plain variants.
+- Every query must filter by `user_id`. There is no admin path. The cron is the only code that legitimately iterates all users.
+- `daily_analyses` has `UNIQUE(user_id, analysis_date)` (constraint `uq_daily_analysis_user_date`). Use upsert, never plain insert.
+- Chat limit of 5 messages/user/day is enforced in [backend/app/routers/chat.py](backend/app/routers/chat.py). The client mirrors the count but is not the authority.
+- There are only two real users (Sudhanva, Sagar). Don't add user-management UI or admin tooling unless asked.
 
 ---
 
