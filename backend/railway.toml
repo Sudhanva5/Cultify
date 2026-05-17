@@ -2,7 +2,12 @@
 builder = "DOCKERFILE"
 
 [deploy]
-startCommand = "alembic upgrade head && python scripts/seed_exercises.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+# Seeder removed from startup chain — it downloads ~800 exercise images
+# sequentially which blocks uvicorn from binding before the healthcheck times
+# out on a cold deploy. Run the seeder once after the first successful deploy:
+#   railway run --service Cultify python scripts/seed_exercises.py
+# (it's idempotent so a one-off run is enough)
+startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
-healthcheckTimeout = 300
+healthcheckTimeout = 600
 restartPolicyType = "ON_FAILURE"
