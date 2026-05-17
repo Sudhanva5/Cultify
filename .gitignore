@@ -1,0 +1,96 @@
+# ─── Secrets & environment ─────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+google-service-account*.json
+*-credentials.json
+
+# ─── macOS ─────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ─── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# ─── FastAPI / backend runtime data ────────────────────────────
+backend/uploads/
+backend/static/exercises/
+*.sqlite
+*.sqlite3
+*.db
+
+# ─── Xcode / SwiftUI ───────────────────────────────────────────
+# User-specific files
+xcuserdata/
+*.xcuserstate
+*.xcuserstatev2
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+
+# Build products
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+Package.pins
+Package.resolved
+.build/
+
+# CocoaPods (if added later)
+Pods/
+
+# Carthage (if added later)
+Carthage/Build/
+
+# fastlane (if added later)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# ─── Editors ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Misc ──────────────────────────────────────────────────────
+*.tmp
+*.bak
+.cache/
