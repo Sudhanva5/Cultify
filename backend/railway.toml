@@ -7,7 +7,7 @@ builder = "DOCKERFILE"
 # out on a cold deploy. Run the seeder once after the first successful deploy:
 #   railway run --service Cultify python scripts/seed_exercises.py
 # (it's idempotent so a one-off run is enough)
-startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 healthcheckPath = "/health"
 healthcheckTimeout = 600
 restartPolicyType = "ON_FAILURE"
